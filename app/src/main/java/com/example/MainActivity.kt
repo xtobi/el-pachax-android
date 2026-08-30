@@ -96,20 +96,12 @@ import java.io.FileOutputStream
 
 const val TARGET_URL = "https://xtobi.github.io/el-pachax-stable/"
 
-/**
- * Removes the WebView-specific identifiers from the User-Agent string to match
- * standard Chrome on Android, ensuring Google OAuth and identity providers
- * process authentication requests without blocking with disallowed_useragent.
- */
 fun cleanUserAgent(originalUa: String): String {
   return originalUa
     .replace("; wv", "")
     .replace("Version/4.0 ", "")
 }
 
-/**
- * Creates a secure temporary file URI for camera captures using FileProvider.
- */
 fun createCameraImageUri(context: Context): Uri? {
   return try {
     val imageDir = File(context.cacheDir, "images").apply { mkdirs() }
@@ -120,10 +112,6 @@ fun createCameraImageUri(context: Context): Uri? {
   }
 }
 
-/**
- * Saves a base64 encoded data payload (e.g. from local JSON backup export)
- * to the device's public Downloads directory.
- */
 fun saveBase64ToDownloads(
   context: Context,
   base64Payload: String,
@@ -151,50 +139,27 @@ fun saveBase64ToDownloads(
       val resolver = context.contentResolver
       val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
       if (uri != null) {
-        resolver.openOutputStream(uri)?.use { os ->
-          os.write(bytes)
-        }
+        resolver.openOutputStream(uri)?.use { os -> os.write(bytes) }
         Handler(Looper.getMainLooper()).post {
-          Toast.makeText(
-            context,
-            "Sauvegarde enregistrée dans Téléchargements",
-            Toast.LENGTH_LONG
-          ).show()
+          Toast.makeText(context, "Sauvegarde enregistrée dans Téléchargements", Toast.LENGTH_LONG).show()
         }
       }
     } else {
       @Suppress("DEPRECATION")
-      val downloadsDir =
-        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-      if (!downloadsDir.exists()) {
-        downloadsDir.mkdirs()
-      }
-      val file = File(downloadsDir, fileName)
-      FileOutputStream(file).use { fos ->
-        fos.write(bytes)
-      }
+      val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+      if (!downloadsDir.exists()) downloadsDir.mkdirs()
+      File(downloadsDir, fileName).outputStream().use { it.write(bytes) }
       Handler(Looper.getMainLooper()).post {
-        Toast.makeText(
-          context,
-          "Sauvegarde enregistrée dans Téléchargements",
-          Toast.LENGTH_LONG
-        ).show()
+        Toast.makeText(context, "Sauvegarde enregistrée dans Téléchargements", Toast.LENGTH_LONG).show()
       }
     }
   } catch (e: Exception) {
     Handler(Looper.getMainLooper()).post {
-      Toast.makeText(
-        context,
-        "Erreur lors de l'enregistrement: ${e.message}",
-        Toast.LENGTH_SHORT
-      ).show()
+      Toast.makeText(context, "Erreur lors de l'enregistrement: ${e.message}", Toast.LENGTH_SHORT).show()
     }
   }
 }
 
-/**
- * JavaScript interface exposed to WebView to receive downloaded JSON backups or blobs.
- */
 class AndroidDownloadBridge(private val context: Context) {
   @JavascriptInterface
   fun saveBase64File(base64Data: String, fileName: String, mimeType: String) {
@@ -208,10 +173,7 @@ class MainActivity : ComponentActivity() {
     enableEdgeToEdge()
     setContent {
       MyApplicationTheme {
-        Surface(
-          modifier = Modifier.fillMaxSize(),
-          color = MaterialTheme.colorScheme.background
-        ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
           ElPachaxWebViewScreen()
         }
       }
@@ -232,12 +194,10 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
   var canGoBack by remember { mutableStateOf(false) }
   var hasLoadedOnce by remember { mutableStateOf(false) }
 
-  // File chooser and camera capture state
   var fileUploadCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
   var currentCameraUri by remember { mutableStateOf<Uri?>(null) }
   var pendingCameraCapture by remember { mutableStateOf(false) }
 
-  // Popup WebView state for Google OAuth / Firebase Authentication popup windows
   var popupWebView by remember { mutableStateOf<WebView?>(null) }
   var popupProgress by remember { mutableFloatStateOf(0f) }
   var isPopupLoading by remember { mutableStateOf(false) }
@@ -256,7 +216,6 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
     popupProgress = 0f
   }
 
-  // Camera Activity Result Launcher
   val cameraLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.TakePicture()
   ) { success ->
@@ -270,46 +229,50 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
     fileUploadCallback = null
   }
 
-  // File Picker / Gallery Activity Result Launcher
   val filePickerLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.StartActivityForResult()
   ) { result ->
-    if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-      val data = result.data
-      val clipData = data?.clipData
-      val singleUri = data?.data
-
-      if (clipData != null && clipData.itemCount > 0) {
-        val uris = Array(clipData.itemCount) { i -> clipData.getItemAt(i).uri }
-        fileUploadCallback?.onReceiveValue(uris)
-      } else if (singleUri != null) {
-        fileUploadCallback?.onReceiveValue(arrayOf(singleUri))
+    val callback = fileUploadCallback
+    try {
+      if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+        val data = result.data
+        val clipData = data?.clipData
+        val singleUri = data?.data
+        when {
+          clipData != null && clipData.itemCount > 0 -> {
+            callback?.onReceiveValue(Array(clipData.itemCount) { i -> clipData.getItemAt(i).uri })
+          }
+          singleUri != null -> callback?.onReceiveValue(arrayOf(singleUri))
+          else -> callback?.onReceiveValue(null)
+        }
       } else {
-        fileUploadCallback?.onReceiveValue(null)
+        callback?.onReceiveValue(null)
       }
-    } else {
-      fileUploadCallback?.onReceiveValue(null)
+    } finally {
+      fileUploadCallback = null
     }
-    fileUploadCallback = null
   }
 
-  // Camera Runtime Permission Launcher
   val cameraPermissionLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.RequestPermission()
   ) { isGranted ->
-    if (isGranted) {
-      if (pendingCameraCapture) {
-        pendingCameraCapture = false
-        val photoUri = createCameraImageUri(context)
-        currentCameraUri = photoUri
-        if (photoUri != null) {
+    if (isGranted && pendingCameraCapture) {
+      pendingCameraCapture = false
+      val photoUri = createCameraImageUri(context)
+      currentCameraUri = photoUri
+      if (photoUri != null) {
+        try {
           cameraLauncher.launch(photoUri)
-        } else {
+        } catch (_: Exception) {
           fileUploadCallback?.onReceiveValue(null)
           fileUploadCallback = null
+          currentCameraUri = null
         }
+      } else {
+        fileUploadCallback?.onReceiveValue(null)
+        fileUploadCallback = null
       }
-    } else {
+    } else if (!isGranted) {
       pendingCameraCapture = false
       Toast.makeText(context, "Permission de la caméra refusée", Toast.LENGTH_SHORT).show()
       fileUploadCallback?.onReceiveValue(null)
@@ -317,7 +280,38 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
     }
   }
 
-  // Check initial network connectivity
+  fun launchImagePicker() {
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val photoPickerIntent = Intent(MediaStore.ACTION_PICK_IMAGES).apply {
+          type = "image/*"
+        }
+        filePickerLauncher.launch(photoPickerIntent)
+      } else {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+          addCategory(Intent.CATEGORY_OPENABLE)
+          type = "image/*"
+          putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/jpeg", "image/png", "image/webp", "image/*"))
+          putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        filePickerLauncher.launch(intent)
+      }
+    } catch (_: Exception) {
+      try {
+        val fallback = Intent(Intent.ACTION_GET_CONTENT).apply {
+          addCategory(Intent.CATEGORY_OPENABLE)
+          type = "image/*"
+          putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/jpeg", "image/png", "image/webp", "image/*"))
+        }
+        filePickerLauncher.launch(Intent.createChooser(fallback, "Choisir une photo"))
+      } catch (_: Exception) {
+        fileUploadCallback?.onReceiveValue(null)
+        fileUploadCallback = null
+      }
+    }
+  }
+
   LaunchedEffect(Unit) {
     if (!isNetworkConnected(context)) {
       isOffline = true
@@ -325,49 +319,35 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
     }
   }
 
-  // Android Back navigation handler:
-  // 1. If a file chooser callback is pending, cancel it gracefully
-  // 2. If OAuth popup is open, navigate back in popup history or close popup
-  // 3. Otherwise navigate back in main WebView history
-  // 4. Otherwise let system exit app
   BackHandler(enabled = fileUploadCallback != null || popupWebView != null || canGoBack) {
     if (fileUploadCallback != null) {
       fileUploadCallback?.onReceiveValue(null)
       fileUploadCallback = null
+      pendingCameraCapture = false
+      currentCameraUri = null
     } else if (popupWebView != null) {
-      if (popupWebView?.canGoBack() == true) {
-        popupWebView?.goBack()
-      } else {
-        closePopup()
-      }
+      if (popupWebView?.canGoBack() == true) popupWebView?.goBack() else closePopup()
     } else {
-      webViewRef?.let { webView ->
-        if (webView.canGoBack()) {
-          webView.goBack()
-        }
-      }
+      webViewRef?.let { webView -> if (webView.canGoBack()) webView.goBack() }
     }
   }
 
-  // Handle lifecycle pause/resume/destroy
   DisposableEffect(lifecycleOwner, webViewRef) {
     val observer = LifecycleEventObserver { _, event ->
       when (event) {
         Lifecycle.Event.ON_PAUSE -> {
-          popupWebView?.onPause()
-          popupWebView?.pauseTimers()
-          webViewRef?.onPause()
-          webViewRef?.pauseTimers()
+          popupWebView?.onPause(); popupWebView?.pauseTimers()
+          webViewRef?.onPause(); webViewRef?.pauseTimers()
         }
         Lifecycle.Event.ON_RESUME -> {
-          popupWebView?.onResume()
-          popupWebView?.resumeTimers()
-          webViewRef?.onResume()
-          webViewRef?.resumeTimers()
+          popupWebView?.onResume(); popupWebView?.resumeTimers()
+          webViewRef?.onResume(); webViewRef?.resumeTimers()
         }
         Lifecycle.Event.ON_DESTROY -> {
           fileUploadCallback?.onReceiveValue(null)
           fileUploadCallback = null
+          pendingCameraCapture = false
+          currentCameraUri = null
           closePopup()
           webViewRef?.destroy()
         }
@@ -383,29 +363,16 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
     }
   }
 
-  Box(
-    modifier = modifier
-      .fillMaxSize()
-      .statusBarsPadding()
-      .navigationBarsPadding()
-  ) {
-    // Native Android WebView (Main application window)
+  Box(modifier = modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
     AndroidView(
-      modifier = Modifier
-        .fillMaxSize()
-        .testTag("webview"),
+      modifier = Modifier.fillMaxSize().testTag("webview"),
       factory = { ctx ->
         WebView(ctx).apply {
-          layoutParams = ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-          )
-
+          layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
           isVerticalScrollBarEnabled = true
           isHorizontalScrollBarEnabled = false
           overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
 
-          // Configure WebSettings for full modern web app support
           settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -421,40 +388,23 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
             allowContentAccess = true
             allowFileAccess = false
             mediaPlaybackRequiresUserGesture = false
-
-            // Multi-window and popup support for Google OAuth / Firebase signInWithPopup
             setSupportMultipleWindows(true)
             javaScriptCanOpenWindowsAutomatically = true
-
-            // Clean user agent to eliminate disallowed_useragent blocks on Google OAuth
             userAgentString = cleanUserAgent(userAgentString)
           }
 
-          // Configure first-party and third-party cookies (critical for cross-origin Firebase auth)
           val cookieManager = CookieManager.getInstance()
           cookieManager.setAcceptCookie(true)
           cookieManager.setAcceptThirdPartyCookies(this, true)
 
-          // Configure WebViewClient
           webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(
-              view: WebView?,
-              request: WebResourceRequest?
-            ): Boolean {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
               val url = request?.url ?: return false
               val scheme = url.scheme?.lowercase() ?: ""
-
               return if (scheme == "http" || scheme == "https") {
-                // Allow normal web navigation inside WebView
                 false
               } else {
-                // Handle external apps/intents (tel:, mailto:, etc.)
-                try {
-                  val intent = Intent(Intent.ACTION_VIEW, url)
-                  ctx.startActivity(intent)
-                } catch (_: Exception) {
-                  // Fallback if no intent handler available
-                }
+                try { ctx.startActivity(Intent(Intent.ACTION_VIEW, url)) } catch (_: Exception) {}
                 true
               }
             }
@@ -471,19 +421,12 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
               hasLoadedOnce = true
               canGoBack = view?.canGoBack() ?: false
               CookieManager.getInstance().flush()
-
-              // Safety check: If the main window ever landed on the Firebase auth handler
-              // (which has an empty body), redirect back to TARGET_URL to prevent blank screen.
               if (url != null && (url.contains("el-pacha.firebaseapp.com") || url.contains("/__/auth/handler"))) {
                 view?.loadUrl(TARGET_URL)
               }
             }
 
-            override fun onReceivedError(
-              view: WebView?,
-              request: WebResourceRequest?,
-              error: WebResourceError?
-            ) {
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
               super.onReceivedError(view, request, error)
               if (request?.isForMainFrame == true) {
                 isOffline = true
@@ -492,14 +435,11 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
             }
           }
 
-          // Configure WebChromeClient with Multi-Window and File Chooser support
           webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
               super.onProgressChanged(view, newProgress)
               loadingProgress = newProgress / 100f
-              if (newProgress >= 100) {
-                isLoading = false
-              }
+              if (newProgress >= 100) isLoading = false
               canGoBack = view?.canGoBack() ?: false
             }
 
@@ -510,31 +450,25 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
             ): Boolean {
               if (filePathCallback == null) return false
 
-              // Cancel any previous pending callback to prevent WebView lockup
               fileUploadCallback?.onReceiveValue(null)
               fileUploadCallback = filePathCallback
 
               val isCapture = fileChooserParams?.isCaptureEnabled == true
               val acceptTypes = fileChooserParams?.acceptTypes ?: emptyArray()
-
               val hasImage = acceptTypes.any { it.contains("image", ignoreCase = true) } || acceptTypes.isEmpty()
               val hasJson = acceptTypes.any { it.contains("json", ignoreCase = true) }
 
               if (isCapture) {
-                // Direct Camera photo capture requested
-                val hasCameraPerm = ContextCompat.checkSelfPermission(
-                  context,
-                  Manifest.permission.CAMERA
-                ) == PackageManager.PERMISSION_GRANTED
-
+                val hasCameraPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
                 if (hasCameraPerm) {
                   val photoUri = createCameraImageUri(context)
                   currentCameraUri = photoUri
                   if (photoUri != null) {
-                    cameraLauncher.launch(photoUri)
+                    try { cameraLauncher.launch(photoUri) } catch (_: Exception) {
+                      fileUploadCallback?.onReceiveValue(null); fileUploadCallback = null; currentCameraUri = null
+                    }
                   } else {
-                    fileUploadCallback?.onReceiveValue(null)
-                    fileUploadCallback = null
+                    fileUploadCallback?.onReceiveValue(null); fileUploadCallback = null
                   }
                 } else {
                   pendingCameraCapture = true
@@ -543,22 +477,20 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
                 return true
               }
 
-              // Normal file or gallery selection
+              if (hasImage && !hasJson) {
+                launchImagePicker()
+                return true
+              }
+
               try {
-                val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                   addCategory(Intent.CATEGORY_OPENABLE)
                   if (hasJson) {
                     type = "application/json"
-                    putExtra(
-                      Intent.EXTRA_MIME_TYPES,
-                      arrayOf("application/json", "text/plain", "application/octet-stream", "*/*")
-                    )
+                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "application/octet-stream", "*/*"))
                   } else if (hasImage) {
                     type = "image/*"
-                    putExtra(
-                      Intent.EXTRA_MIME_TYPES,
-                      arrayOf("image/jpeg", "image/png", "image/webp", "image/jpg", "image/*")
-                    )
+                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/jpeg", "image/png", "image/webp", "image/*"))
                   } else {
                     type = "*/*"
                   }
@@ -566,37 +498,23 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
                     putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                   }
                 }
-
                 val chooserTitle = if (hasImage) "Choisir une photo" else if (hasJson) "Choisir la sauvegarde" else "Choisir un fichier"
-                filePickerLauncher.launch(Intent.createChooser(intent, chooserTitle))
+                filePickerLauncher.launch(intent)
                 return true
-              } catch (e: Exception) {
+              } catch (_: Exception) {
                 fileUploadCallback?.onReceiveValue(null)
                 fileUploadCallback = null
                 return false
               }
             }
 
-            override fun onCreateWindow(
-              view: WebView?,
-              isDialog: Boolean,
-              isUserGesture: Boolean,
-              resultMsg: Message?
-            ): Boolean {
+            override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message?): Boolean {
               if (resultMsg == null || view == null) return false
-
-              // Close any previously active popup view
               closePopup()
-
-              // Create popup WebView dedicated to the OAuth flow
               val popup = WebView(view.context).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                  ViewGroup.LayoutParams.MATCH_PARENT,
-                  ViewGroup.LayoutParams.MATCH_PARENT
-                )
+                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 isVerticalScrollBarEnabled = true
                 isHorizontalScrollBarEnabled = true
-
                 settings.apply {
                   javaScriptEnabled = true
                   domStorageEnabled = true
@@ -611,67 +529,40 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
                   mediaPlaybackRequiresUserGesture = false
                   userAgentString = cleanUserAgent(userAgentString)
                 }
-
                 val cm = CookieManager.getInstance()
                 cm.setAcceptCookie(true)
                 cm.setAcceptThirdPartyCookies(this, true)
-
                 webChromeClient = object : WebChromeClient() {
-                  override fun onCloseWindow(window: WebView?) {
-                    super.onCloseWindow(window)
-                    closePopup()
-                  }
-
+                  override fun onCloseWindow(window: WebView?) { super.onCloseWindow(window); closePopup() }
                   override fun onProgressChanged(v: WebView?, newProgress: Int) {
                     super.onProgressChanged(v, newProgress)
                     popupProgress = newProgress / 100f
                     isPopupLoading = newProgress < 100
                   }
                 }
-
                 webViewClient = object : WebViewClient() {
-                  override fun shouldOverrideUrlLoading(
-                    v: WebView?,
-                    request: WebResourceRequest?
-                  ): Boolean {
+                  override fun shouldOverrideUrlLoading(v: WebView?, request: WebResourceRequest?): Boolean {
                     val url = request?.url ?: return false
                     val scheme = url.scheme?.lowercase() ?: ""
-
-                    return if (scheme == "http" || scheme == "https") {
-                      false
-                    } else {
-                      try {
-                        val intent = Intent(Intent.ACTION_VIEW, url)
-                        view.context.startActivity(intent)
-                      } catch (_: Exception) {}
+                    return if (scheme == "http" || scheme == "https") false else {
+                      try { view.context.startActivity(Intent(Intent.ACTION_VIEW, url)) } catch (_: Exception) {}
                       true
                     }
                   }
-
-                  override fun onPageFinished(v: WebView?, url: String?) {
-                    super.onPageFinished(v, url)
-                    CookieManager.getInstance().flush()
-                  }
+                  override fun onPageFinished(v: WebView?, url: String?) { super.onPageFinished(v, url); CookieManager.getInstance().flush() }
                 }
               }
-
-              // Bind popup WebView to the transport message so window.opener is established
               val transport = resultMsg.obj as WebView.WebViewTransport
               transport.webView = popup
               resultMsg.sendToTarget()
-
               popupWebView = popup
               isPopupLoading = true
               return true
             }
 
-            override fun onCloseWindow(window: WebView?) {
-              super.onCloseWindow(window)
-              closePopup()
-            }
+            override fun onCloseWindow(window: WebView?) { super.onCloseWindow(window); closePopup() }
           }
 
-          // Register JavaScript Interface and Download Listener for Local Backup export
           addJavascriptInterface(AndroidDownloadBridge(ctx), "AndroidDownloadBridge")
 
           setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
@@ -680,23 +571,16 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
               val js = """
                 (function() {
                   try {
-                    fetch('$url')
-                      .then(function(res) { return res.blob(); })
-                      .then(function(blob) {
-                        var reader = new FileReader();
-                        reader.onloadend = function() {
-                          if (window.AndroidDownloadBridge) {
-                            window.AndroidDownloadBridge.saveBase64File(reader.result, '$cleanFileName', '$mimetype');
-                          }
-                        };
-                        reader.readAsDataURL(blob);
-                      })
-                      .catch(function(err) {
-                        console.error('Blob download failed:', err);
-                      });
-                  } catch(e) {
-                    console.error('Download error:', e);
-                  }
+                    fetch('$url').then(function(res) { return res.blob(); }).then(function(blob) {
+                      var reader = new FileReader();
+                      reader.onloadend = function() {
+                        if (window.AndroidDownloadBridge) {
+                          window.AndroidDownloadBridge.saveBase64File(reader.result, '$cleanFileName', '$mimetype');
+                        }
+                      };
+                      reader.readAsDataURL(blob);
+                    }).catch(function(err) { console.error('Blob download failed:', err); });
+                  } catch(e) { console.error('Download error:', e); }
                 })();
               """.trimIndent()
               evaluateJavascript(js, null)
@@ -710,19 +594,13 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
                   setDescription("Téléchargement du fichier")
                   setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype))
                   setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                  setDestinationInExternalPublicDir(
-                    Environment.DIRECTORY_DOWNLOADS,
-                    URLUtil.guessFileName(url, contentDisposition, mimetype)
-                  )
+                  setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype))
                 }
                 val downloadManager = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
                 downloadManager?.enqueue(request)
                 Toast.makeText(ctx, "Téléchargement en cours...", Toast.LENGTH_SHORT).show()
               } catch (_: Exception) {
-                try {
-                  val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                  ctx.startActivity(intent)
-                } catch (_: Exception) {}
+                try { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) {}
               }
             }
           }
@@ -731,211 +609,77 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
           loadUrl(TARGET_URL)
         }
       },
-      update = {
-        // Can be used if external props change
-      }
+      update = {}
     )
 
-    // Top Linear Progress Indicator while loading
     AnimatedVisibility(
       visible = isLoading && !isOffline,
       enter = fadeIn(),
       exit = fadeOut(),
-      modifier = Modifier
-        .fillMaxWidth()
-        .align(Alignment.TopCenter)
+      modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter)
     ) {
       if (loadingProgress > 0f && loadingProgress < 1f) {
-        LinearProgressIndicator(
-          progress = { loadingProgress },
-          modifier = Modifier
-            .fillMaxWidth()
-            .height(3.dp)
-            .testTag("loading_indicator")
-        )
+        LinearProgressIndicator(progress = { loadingProgress }, modifier = Modifier.fillMaxWidth().height(3.dp).testTag("loading_indicator"))
       } else {
-        LinearProgressIndicator(
-          modifier = Modifier
-            .fillMaxWidth()
-            .height(3.dp)
-            .testTag("loading_indicator")
-        )
+        LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(3.dp).testTag("loading_indicator"))
       }
     }
 
-    // Initial Splash / Fullscreen Loading spinner on first load before content is ready
     if (isLoading && !hasLoadedOnce && !isOffline) {
-      Box(
-        modifier = Modifier
-          .fillMaxSize()
-          .background(MaterialTheme.colorScheme.background),
-        contentAlignment = Alignment.Center
-      ) {
-        Column(
-          horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.Center
-        ) {
-          CircularProgressIndicator(
-            modifier = Modifier
-              .size(48.dp)
-              .testTag("loading_spinner"),
-            color = MaterialTheme.colorScheme.primary
-          )
+      Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+          CircularProgressIndicator(modifier = Modifier.size(48.dp).testTag("loading_spinner"), color = MaterialTheme.colorScheme.primary)
           Spacer(modifier = Modifier.height(16.dp))
-          Text(
-            text = "Loading El Pachax...",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground
-          )
+          Text(text = "Loading El Pachax...", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
         }
       }
     }
 
-    // Google Sign-In / OAuth Popup Window overlay
     if (popupWebView != null) {
       popupWebView?.let { pWebView ->
-        Surface(
-          modifier = Modifier
-            .fillMaxSize()
-            .testTag("popup_overlay"),
-          color = MaterialTheme.colorScheme.background
-        ) {
+        Surface(modifier = Modifier.fillMaxSize().testTag("popup_overlay"), color = MaterialTheme.colorScheme.background) {
           Column(modifier = Modifier.fillMaxSize()) {
-            // Popup Top Bar with Title and Close ("✕") button
-            Surface(
-              modifier = Modifier.fillMaxWidth(),
-              color = MaterialTheme.colorScheme.surfaceVariant,
-              tonalElevation = 3.dp
-            ) {
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-              ) {
-                Text(
-                  text = "تسجيل الدخول — El Pachax",
-                  style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.SemiBold,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                IconButton(
-                  onClick = { closePopup() },
-                  modifier = Modifier.testTag("close_popup_button")
-                ) {
-                  Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Close Sign-In",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                  )
+            Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, tonalElevation = 3.dp) {
+              Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(text = "تسجيل الدخول — El Pachax", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                IconButton(onClick = { closePopup() }, modifier = Modifier.testTag("close_popup_button")) {
+                  Icon(imageVector = Icons.Default.Close, contentDescription = "Close Sign-In", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
               }
             }
-
             if (isPopupLoading) {
               if (popupProgress > 0f && popupProgress < 1f) {
-                LinearProgressIndicator(
-                  progress = { popupProgress },
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .height(3.dp)
-                    .testTag("popup_loading_indicator")
-                )
+                LinearProgressIndicator(progress = { popupProgress }, modifier = Modifier.fillMaxWidth().height(3.dp).testTag("popup_loading_indicator"))
               } else {
-                LinearProgressIndicator(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .height(3.dp)
-                    .testTag("popup_loading_indicator")
-                )
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(3.dp).testTag("popup_loading_indicator"))
               }
             }
-
-            AndroidView(
-              modifier = Modifier
-                .fillMaxSize()
-                .weight(1f)
-                .testTag("popup_webview"),
-              factory = {
-                (pWebView.parent as? ViewGroup)?.removeView(pWebView)
-                pWebView
-              }
-            )
+            AndroidView(modifier = Modifier.fillMaxSize().weight(1f).testTag("popup_webview"), factory = {
+              (pWebView.parent as? ViewGroup)?.removeView(pWebView)
+              pWebView
+            })
           }
         }
       }
     }
 
-    // Offline / No Internet Connection View
     if (isOffline) {
-      Box(
-        modifier = Modifier
-          .fillMaxSize()
-          .background(MaterialTheme.colorScheme.background)
-          .testTag("offline_view"),
-        contentAlignment = Alignment.Center
-      ) {
-        Column(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(32.dp),
-          horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.Center
-        ) {
-          Icon(
-            imageVector = Icons.Default.Warning,
-            contentDescription = "No internet connection",
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.error
-          )
+      Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("offline_view"), contentAlignment = Alignment.Center) {
+        Column(modifier = Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+          Icon(imageVector = Icons.Default.Warning, contentDescription = "No internet connection", modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.error)
           Spacer(modifier = Modifier.height(16.dp))
-          Text(
-            text = "No internet connection",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
-            textAlign = TextAlign.Center
-          )
+          Text(text = "No internet connection", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center)
           Spacer(modifier = Modifier.height(8.dp))
-          Text(
-            text = "Please check your network connection and try again.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-          )
+          Text(text = "Please check your internet connection and try again.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center)
           Spacer(modifier = Modifier.height(24.dp))
-          Button(
-            onClick = {
-              if (isNetworkConnected(context)) {
-                isOffline = false
-                isLoading = true
-                val currentUrl = webViewRef?.url
-                if (currentUrl != null && currentUrl.isNotEmpty() && currentUrl != "about:blank") {
-                  webViewRef?.reload()
-                } else {
-                  webViewRef?.loadUrl(TARGET_URL)
-                }
-              } else {
-                // Retry anyway in case network state is transitioning
-                isOffline = false
-                isLoading = true
-                webViewRef?.loadUrl(TARGET_URL)
-              }
-            },
-            modifier = Modifier.testTag("retry_button"),
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(
-              containerColor = MaterialTheme.colorScheme.primary
-            )
-          ) {
-            Icon(
-              imageVector = Icons.Default.Refresh,
-              contentDescription = "Retry",
-              modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.size(8.dp))
-            Text("Retry")
+          Button(onClick = {
+            isOffline = false
+            isLoading = true
+            webViewRef?.reload()
+          }, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
+            Icon(imageVector = Icons.Default.Refresh, contentDescription = "Retry")
+            Spacer(modifier = Modifier.padding(4.dp))
+            Text(text = "Retry")
           }
         }
       }
@@ -943,18 +687,9 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
   }
 }
 
-/**
- * Checks if the device has an active network with internet capability.
- */
 fun isNetworkConnected(context: Context): Boolean {
-  val connectivityManager =
-    context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
-  val activeNetwork = connectivityManager.activeNetwork ?: return false
-  val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork) ?: return false
-  return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-}
-
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-  Text(text = "Hello $name!", modifier = modifier)
+  val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return true
+  val network = connectivityManager.activeNetwork ?: return false
+  val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+  return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
 }
