@@ -1,0 +1,57 @@
+name: Apply WebView cache fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[webview-cache-fix]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch WebView to always load the current web app
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/example/MainActivity.kt')
+          s = p.read_text()
+          old = 'cacheMode = WebSettings.LOAD_DEFAULT'
+          if old not in s:
+              raise SystemExit('Expected WebView cacheMode line was not found.')
+          s = s.replace(old, 'cacheMode = WebSettings.LOAD_NO_CACHE', 1)
+          old_load = 'webViewRef = this\n          loadUrl(TARGET_URL)'
+          new_load = 'webViewRef = this\n          // The web app is deployed independently from the APK. Always fetch the latest\n          // GitHub Pages bundle so Android does not keep an older profile-photo implementation.\n          clearCache(true)\n          loadUrl("${TARGET_URL}?v=firestore-photos-20260830")'
+          if old_load not in s:
+              raise SystemExit('Expected initial load block was not found.')
+          s = s.replace(old_load, new_load, 1)
+          p.write_text(s)
+          PY
+
+      - name: Commit Android WebView cache fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/example/MainActivity.kt
+          if git diff --cached --quiet; then
+            echo "No changes needed."
+            exit 0
+          fi
+          git commit -m "Fix Android WebView cache for latest web app [webview-cache-fix]"
+          git push
+
+      - name: Remove one-time patch workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/apply-webview-cache-fix.yml
+          git commit -m "Remove one-time WebView cache patch workflow [webview-cache-fix]"
+          git push
