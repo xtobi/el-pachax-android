@@ -378,7 +378,7 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
             domStorageEnabled = true
             @Suppress("DEPRECATION")
             databaseEnabled = true
-            cacheMode = WebSettings.LOAD_DEFAULT
+            cacheMode = WebSettings.LOAD_NO_CACHE
             setSupportZoom(true)
             builtInZoomControls = true
             displayZoomControls = false
@@ -606,7 +606,10 @@ fun ElPachaxWebViewScreen(modifier: Modifier = Modifier) {
           }
 
           webViewRef = this
-          loadUrl(TARGET_URL)
+          // The web app is deployed independently from the APK. Always fetch the latest
+          // GitHub Pages bundle so Android does not keep an older profile-photo implementation.
+          clearCache(true)
+          loadUrl("${TARGET_URL}?v=firestore-photos-20260830")
         }
       },
       update = {}
